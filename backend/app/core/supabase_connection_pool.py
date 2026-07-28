@@ -295,6 +295,7 @@ class SupabaseConnectionPool:
         self.max_connections = settings.supabase_max_concurrent_connections
         self.timeout = settings.supabase_connection_timeout
         self.recycle_interval = settings.supabase_pool_recycle_interval
+        self._supabase_configured = bool(settings.supabase_url and settings.supabase_service_role_key)
         
         # Connection management
         self._pool: asyncio.Queue = asyncio.Queue(maxsize=self.max_connections)
@@ -320,7 +321,15 @@ class SupabaseConnectionPool:
         """Initialize the connection pool"""
         if self._initialized:
             return
-            
+
+        if not self._supabase_configured:
+            logger.warning(
+                "Supabase URL/service role key not set - connection pool will serve "
+                "graceful-degradation fallback responses only"
+            )
+            self._initialized = True
+            return
+
         try:
             logger.info(f"Initializing Supabase connection pool with {self.max_connections} connections")
             
@@ -354,6 +363,10 @@ class SupabaseConnectionPool:
     @asynccontextmanager
     async def get_client(self):
         """Get a client from the pool with automatic return and graceful degradation"""
+        if not self._supabase_configured:
+            yield GracefulDegradationClient(fallback_service)
+            return
+
         if self._circuit_breaker_open:
             if time.time() - self._circuit_breaker_opened_at < self._circuit_breaker_timeout:
                 # Circuit breaker is open - provide graceful degradation
